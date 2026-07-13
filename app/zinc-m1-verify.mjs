@@ -75,12 +75,43 @@ await runSmoke('m1 terminal input and layout', async ({ page, baseline }) => {
     powerShellUtf8WriteLine(asciiMarker),
     asciiMarker
   )
+
+  // TEMP DIAGNOSTIC — not for merge. Reports the console encodings the shell
+  // actually runs with inside Zinc's pty, then shows what the CJK line became.
+  const diagMarker = `ZINC-DIAG-${nonce}`
+  const diagB64 = Buffer.from(diagMarker, 'utf8').toString('base64')
   await runPowerShellCommand(
     page,
     tabId,
-    powerShellUtf8WriteLine(cjkMarker),
-    cjkMarker
+    `[Console]::WriteLine([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${diagB64}')) + ` +
+      `" out=" + [Console]::OutputEncoding.CodePage + " in=" + [Console]::InputEncoding.CodePage + ` +
+      `" ps=" + $PSVersionTable.PSVersion.ToString() + " exe=" + [Diagnostics.Process]::GetCurrentProcess().ProcessName)`,
+    diagMarker
   )
+
+  let cjkError = null
+  try {
+    await runPowerShellCommand(
+      page,
+      tabId,
+      powerShellUtf8WriteLine(cjkMarker),
+      cjkMarker
+    )
+  } catch (error) {
+    cjkError = error
+  }
+
+  const diagBuffer = await page.evaluate((id) => window.__zincRegistry.getBufferText(id), tabId)
+  for (const line of diagBuffer.split('\n')) {
+    const text = line.trim()
+    if (!text.includes('ZINC-') || text.includes('COMMAND-COMPLETE') || text.includes('FromBase64String')) continue
+    const codes = Array.from(text)
+      .map((ch) => (ch.codePointAt(0) > 126 ? `U+${ch.codePointAt(0).toString(16).toUpperCase()}` : ch))
+      .join('')
+    console.log(`DIAG-LINE: ${JSON.stringify(text)}  codes=${JSON.stringify(codes)}`)
+  }
+  console.log(`DIAG: CJK marker present in buffer = ${diagBuffer.includes(cjkMarker)}`)
+  if (cjkError) console.log(`DIAG: CJK assertion threw: ${cjkError.message}`)
 
   assertBufferTrace(
     await terminalBufferTrace(page, tabId, [asciiMarker, cjkMarker]),
